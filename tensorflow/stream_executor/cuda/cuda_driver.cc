@@ -967,6 +967,28 @@ GpuDriver::CreateMemoryHandle(GpuContext* context, uint64 bytes) {
   }
 }
 
+/* static */ port::StatusOr<GpuDriver::GenericMemoryHandle>
+GpuDriver::ImportShareableMemoryHandle(GpuContext* context, uint64 bytes, void* osHandle, CUmemAllocationHandleType shHandleType) {
+  ScopedActivateContext activation(context);
+  
+  CUmemGenericAllocationHandle local_handle;
+  CUresult res = cuMemImportFromShareableHandle(&local_handle, osHandle, shHandleType);
+  if (res != CUDA_SUCCESS) {
+    if (res == 101) {
+      CUdevice device_id = -1;
+      auto curesult = cuCtxGetDevice(&device_id);
+      if (curesult != CUDA_SUCCESS) LOG(ERROR) << "Failed to get device from context";
+      LOG(ERROR) << "cuMemImportFromShareableHandle got invalid device: " << device_id;
+      LOG(ERROR) << "cuMemImportFromShareableHandle got invalid fd: " << *(uintptr_t *)osHandle;
+    }
+    return port::InternalError(
+	absl::StrFormat("CUresult = %d, failed to import shareable memory handle", res));
+  }
+
+  return GpuDriver::GenericMemoryHandle{local_handle, bytes};
+}
+
+
 /* static */ port::Status GpuDriver::MapMemory(
     GpuContext* context, CUdeviceptr va,
     const GpuDriver::GenericMemoryHandle& handle,

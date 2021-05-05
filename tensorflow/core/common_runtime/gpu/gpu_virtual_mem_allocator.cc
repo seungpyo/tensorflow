@@ -19,6 +19,8 @@ limitations under the License.
 #include "tensorflow/core/lib/strings/numbers.h"
 #include "tensorflow/stream_executor/lib/status.h"
 
+#include "m3.h"
+
 #if CUDA_VERSION >= 10020
 
 namespace tensorflow {
@@ -129,6 +131,8 @@ GpuVirtualMemAllocator::~GpuVirtualMemAllocator() {
   GpuDriver::FreeVirtualMemory(&gpu_context_, vmem_);
 }
 
+#define SEUNGPYO
+
 void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
                                     size_t* bytes_received) {
   if (num_bytes == 0) return nullptr;
@@ -147,6 +151,7 @@ void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
     return nullptr;
   }
 
+#ifndef SEUNGPYO
   // Create physical memory backing allocation.
   auto maybe_handle =
       GpuDriver::CreateMemoryHandle(&gpu_context_, padded_bytes);
@@ -155,6 +160,32 @@ void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
     return nullptr;
   }
   GpuDriver::GenericMemoryHandle handle = std::move(maybe_handle).ValueOrDie();
+ 
+#else
+  LOG(INFO) << "Using shared memory allocator";
+
+  char fakeMemId[] = "fake_id_42";
+  M3::Response res;
+  M3::Status m3Status =
+    M3::RemoteMemCreate(padded_bytes, 0, fakeMemId, res);
+  if (m3Status != M3::M3_ACK) {
+    if (m3Status == M3::M3_SYSCALL_FAILURE)
+      LOG(ERROR) << "Socket system call faiure";
+    else
+      LOG(ERROR) << "M3 Server returned error code " << m3Status;
+    LOG(ERROR) << "Failed to create remote GPU memory region";
+    return nullptr;
+  }
+  auto maybe_handle = 
+      GpuDriver::ImportShareableMemoryHandle(&gpu_context_, padded_bytes, (void *)res.sh_handle, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
+   if (!maybe_handle.ok()) {
+    LOG(ERROR) << maybe_handle.status();
+    return nullptr;
+  }
+  LOG(INFO) << "GpuDriver::ImportShareableMemoryHandle : returned shHandle = " << res.sh_handle;
+  GpuDriver::GenericMemoryHandle handle = std::move(maybe_handle).ValueOrDie();
+  LOG(INFO) << "Imported handle@ 0x" << std::hex << handle.handle << ", size = 0x" << std::hex << handle.bytes;
+#endif
 
   // Map VAs for this physical memory.
   auto status =

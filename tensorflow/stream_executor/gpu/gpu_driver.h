@@ -182,6 +182,9 @@ class GpuDriver {
   static void ReleaseMemoryHandle(GpuContext* context,
                                   GenericMemoryHandle handle);
 
+  static port::StatusOr<GpuDriver::GenericMemoryHandle> ImportShareableMemoryHandle(
+      GpuContext* context, uint64 bytes, void* osHandle, CUmemAllocationHandleType shHandleType);
+
   // Maps a memory allocation handle to a reserved virtual address range via
   // cuMemMap and sets the appropriate access settings via cuMemSetAccess.
   // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__VA.html#group__CUDA__VA_1gff1d395423af5c5c75375516959dae56

@@ -207,9 +207,13 @@ tf_cuda_library(
     name = "gpu_virtual_mem_allocator",
     srcs = [
         "gpu_virtual_mem_allocator.cc",
+        "m3.cc",
+        "m3_ipc.cc"
     ],
     hdrs = [
         "gpu_virtual_mem_allocator.h",
+        "m3.h",
+        "cuutils.h",
     ],
     copts = tf_copts(),
     features = ["parse_headers"],

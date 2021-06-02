@@ -135,6 +135,11 @@ GpuVirtualMemAllocator::~GpuVirtualMemAllocator() {
 
 void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
                                     size_t* bytes_received) {
+  return GpuVirtualMemAllocator::Alloc(alignment, num_bytes, bytes_received, nullptr);
+}
+
+void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
+                                    size_t* bytes_received, const char * memId) {
   if (num_bytes == 0) return nullptr;
   size_t padded_bytes = (num_bytes + granularity_ - 1) & ~(granularity_ - 1);
 
@@ -163,11 +168,49 @@ void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
  
 #else
   LOG(INFO) << "Using shared memory allocator";
-
-  char fakeMemId[] = "fake_id_42";
+  char buf[128];
+  if(memId == nullptr) {
+    std::time_t t = std::time(0);
+    std::srand(std::time(nullptr));
+    int randVal = std::rand();
+    sprintf(buf, "alloc_at_%d_%d", t, randVal);
+    memId = buf;
+  }
+  LOG(INFO) << "Memory ID =  " << memId << ", size = " << padded_bytes;
   M3::Response res;
-  M3::Status m3Status =
-    M3::RemoteMemCreate(padded_bytes, 0, fakeMemId, res);
+
+  std::promise<M3::Status> p;
+  std::future<M3::Status> m3Future = p.get_future();
+  LOG(INFO) << "Future state valid = " << m3Future.valid();
+  auto timedRemoteMemCreate = [padded_bytes, memId, &res](std::promise<M3::Status>* p) {
+    M3::Status status =
+        M3::RemoteMemCreate(padded_bytes, 0, const_cast<const char *>(memId), res);
+    p->set_value(status);
+  };
+
+  std::thread t(timedRemoteMemCreate, &p);
+
+  M3::Status m3Status;
+  const int m3TimeOutSeconds = 2;
+  while (true) {
+    std::future_status futureStatus = m3Future.wait_for(std::chrono::seconds(m3TimeOutSeconds));
+    if (futureStatus == std::future_status::timeout) {
+      LOG(ERROR) << "RemoteMemCreate timed out, Memory ID = " << memId << ", size = " << padded_bytes;
+      LOG(ERROR) << "Timeout = " << m3TimeOutSeconds << "seconds";
+      m3Status = M3::M3_REMOTE_MEM_CREATE_TIMEOUT;
+      break;
+    } else if (futureStatus == std::future_status::ready) {
+      m3Status = m3Future.get();
+      break;
+    } else {
+      LOG(ERROR) << "Unknown error while wating for future";
+      m3Status = M3::M3_UNKNOWN_ERR;
+      break;
+    }
+  }
+
+  t.join();
+
   if (m3Status != M3::M3_ACK) {
     if (m3Status == M3::M3_SYSCALL_FAILURE)
       LOG(ERROR) << "Socket system call faiure";
@@ -176,15 +219,21 @@ void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
     LOG(ERROR) << "Failed to create remote GPU memory region";
     return nullptr;
   }
+
   auto maybe_handle = 
       GpuDriver::ImportShareableMemoryHandle(&gpu_context_, padded_bytes, (void *)res.sh_handle, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR);
    if (!maybe_handle.ok()) {
     LOG(ERROR) << maybe_handle.status();
     return nullptr;
   }
+  if (close(res.sh_handle) < 0)
+    M3::panic("Closing shareable handle in GPUBFCAllocator::Free ");
+
   LOG(INFO) << "GpuDriver::ImportShareableMemoryHandle : returned shHandle = " << res.sh_handle;
   GpuDriver::GenericMemoryHandle handle = std::move(maybe_handle).ValueOrDie();
   LOG(INFO) << "Imported handle@ 0x" << std::hex << handle.handle << ", size = 0x" << std::hex << handle.bytes;
+
+  addr2memId_[(void*)next_va] = memId;
 #endif
 
   // Map VAs for this physical memory.
@@ -195,6 +244,7 @@ void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
     GpuDriver::ReleaseMemoryHandle(&gpu_context_, std::move(handle));
     return nullptr;
   }
+
   next_alloc_offset_ += handle.bytes;
   mappings_.push_back({next_va, std::move(handle)});
   VisitAlloc(reinterpret_cast<void*>(next_va), gpu_id_.value(), padded_bytes);
@@ -203,6 +253,10 @@ void* GpuVirtualMemAllocator::Alloc(size_t alignment, size_t num_bytes,
 }
 
 void GpuVirtualMemAllocator::Free(void* ptr, size_t num_bytes) {
+  GpuVirtualMemAllocator::Free(ptr, num_bytes, nullptr);
+}
+
+void GpuVirtualMemAllocator::Free(void* ptr, size_t num_bytes, const char* memId) {
   if (ptr == nullptr) return;
 
   auto mapping_it =
@@ -234,7 +288,17 @@ void GpuVirtualMemAllocator::Free(void* ptr, size_t num_bytes) {
   VLOG(1) << "Freeing " << num_mappings_to_free << " mappings for a total of "
           << total_bytes << " bytes";
   for (auto it = mapping_it; it < mapping_it + num_mappings_to_free; ++it) {
+
     GpuDriver::UnmapMemory(&gpu_context_, it->va, it->physical.bytes);
+#ifdef SEUNGPYO
+    M3::Response res;
+    std::string s = addr2memId_[(void *)(it->va)];
+    memId = s.c_str();
+    M3::Status status = M3::RemoteMemRelease(it->physical.bytes, memId, res);
+    if (status != M3::M3_ACK) {
+      LOG(ERROR) << "M3 server returned error code " << res.status;
+    }
+#endif
     GpuDriver::ReleaseMemoryHandle(&gpu_context_, std::move(it->physical));
   }
 

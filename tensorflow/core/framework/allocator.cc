@@ -96,6 +96,12 @@ SubAllocator::SubAllocator(const std::vector<Visitor>& alloc_visitors,
                            const std::vector<Visitor>& free_visitors)
     : alloc_visitors_(alloc_visitors), free_visitors_(free_visitors) {}
 
+void* SubAllocator::Alloc(size_t alignment, size_t num_bytes, size_t* bytes_received, const char* memId) {
+  LOG(ERROR) << "SubAllocator::Alloc NYI!";
+  return nullptr;
+}
+
+
 void SubAllocator::VisitAlloc(void* ptr, int index, size_t num_bytes) {
   for (const auto& v : alloc_visitors_) {
     v(ptr, index, num_bytes);

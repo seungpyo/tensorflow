@@ -274,7 +274,7 @@ TEST_P(GPUBFCAllocatorTest, AllocationsAndDeallocationsWithGrowth) {
     size_t size = std::min<size_t>(
         std::max<size_t>(rand.Rand32() % max_mem, 100), max_mem);
     void* raw = a.AllocateRaw(1, size);
-
+    LOG(INFO) << "Phase 1: Allocated ptr #" << s << ", size = " << size;
     initial_ptrs.push_back(raw);
   }
 
@@ -294,6 +294,8 @@ TEST_P(GPUBFCAllocatorTest, AllocationsAndDeallocationsWithGrowth) {
     size_t size = std::min<size_t>(
         std::max<size_t>(rand.Rand32() % max_mem_2, 100), max_mem_2);
     void* raw = a.AllocateRaw(1, size);
+
+    LOG(INFO) << "Phase 2: Allocated ptr #" << s << ", size = " << size;
     existing_ptrs.push_back(raw);
   }
 
@@ -615,13 +617,16 @@ TEST_F(GPUBFCAllocatorTest_SubAllocatorSpecific,
   std::vector<void*> initial_ptrs;
   for (size_t s = 0; s < 128; s++) {
     void* raw = a.AllocateRaw(1, size);
+    LOG(INFO) << "Allocating pointer #" << s << " of size 0x" << std::hex << size;
     initial_ptrs.push_back(raw);
   }
   // Deallocate all but the last one so the big chunk cannot be GC'd
   for (int i = 0; i < 127; ++i) {
+    LOG(INFO) << "Deallocating pointer #" << i << " of size 0x" << std::hex << size;
     a.DeallocateRaw(initial_ptrs[i]);
   }
   void* big_alloc = a.AllocateRaw(1, k512MiB - size);
+  LOG(INFO) << "Allocating big_alloc pointer of size 0x" << std::hex << (k512MiB - size);
   EXPECT_NE(big_alloc, nullptr);
 }
 #endif

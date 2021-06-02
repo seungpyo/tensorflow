@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iostream>
+#include <sstream>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -21,6 +22,9 @@
 #include <sys/wait.h>
 #include <sys/mman.h>
 #include <atomic>
+#include <thread>
+#include <chrono>
+#include <future>
 #include <semaphore.h>
 #include "cuda.h"
 #include "cuutils.h"
@@ -32,6 +36,7 @@ typedef uintptr_t shareable_handle_t;
 enum Cmd {
 	M3_INVALID_CMD,
 	M3_MEM_CREATE,
+  M3_MEM_RELEASE,
 	M3_HALT
 };
 
@@ -45,11 +50,13 @@ typedef struct Request {
 	Request() = default;
 	Request(Cmd _cmd, size_t _num_bytes, size_t _alignment, char * _mem_id) :
 		cmd(_cmd), num_bytes(_num_bytes), alignment(_alignment) {
-		strncpy(mem_id, _mem_id, MAX_MEMID_LEN);
+    if (_mem_id != nullptr)
+		  strncpy(mem_id, _mem_id, MAX_MEMID_LEN);
 	}
 	Request(Cmd _cmd, size_t _num_bytes, size_t _alignment, const char * _mem_id) :
 		cmd(_cmd), num_bytes(_num_bytes), alignment(_alignment) {
-		strncpy(mem_id, _mem_id, MAX_MEMID_LEN);
+    if (_mem_id != nullptr)
+		  strncpy(mem_id, _mem_id, MAX_MEMID_LEN);
 	}
 
 } Request;
@@ -62,7 +69,9 @@ enum Status {
 	M3_SYSCALL_FAILURE,
 	M3_SYSCALL_SENDTO_FAILURE,
 	M3_SYSCALL_RECVFROM_FAILURE,
-	M3_SYSCALL_RECVHANDLE_FAILURE
+	M3_SYSCALL_RECVHANDLE_FAILURE,
+  M3_REMOTE_MEM_CREATE_TIMEOUT,
+  M3_UNKNOWN_ERR
 };
 
 typedef struct Response {
@@ -74,12 +83,14 @@ typedef struct Response {
 		status(_status), sh_handle(_sh_handle), recv_size(_recv_size) {}
 } Response;
 
-Status RemoteMemCreate(size_t num_bytes, size_t alignment, char *mem_id, Response &res);
+Status RemoteMemCreate(size_t num_bytes, size_t alignment, const char *mem_id, Response &res);
+Status RemoteMemRelease(size_t num_bytes, const char* mem_id, Response& res);
 
 class Server {
 	public:
 		Server();
 		void Run();
+    std::string MemoryUsageString();
 
 	private:
 		CUmemAllocationProp initProp() {
@@ -111,6 +122,11 @@ class Server {
 
 		std::unordered_map<CUmemGenericAllocationHandle, std::vector<shareable_handle_t>> phys2shHandle_;
 		std::unordered_map<std::pair<std::string, size_t>, CUmemGenericAllocationHandle, pairHash> memId2phys_;
+
+    int ordinal_;
+    CUdevice device_;
+    size_t totalAllocatedMem_;
+    size_t totalAvailableMem_;
 };
 
 static struct sockaddr_un srv_addr = {

@@ -1,3 +1,5 @@
+#include <iostream>
+
 #include "m3.h"
 
 #include "tensorflow/core/common_runtime/gpu/gpu_virtual_mem_allocator.h"
@@ -12,7 +14,8 @@ namespace M3 {
 extern struct sockaddr_un srv_addr;
 extern socklen_t srv_addr_len;
 
-Status RemoteMemCreate(size_t num_bytes, size_t alignment, char *mem_id, Response& res) {
+Status RemoteMemCreate(size_t num_bytes, size_t alignment, const char *mem_id, Response& res) {
+
 	Request req(M3_MEM_CREATE, num_bytes, alignment, mem_id);
 
 	struct sockaddr_un client_addr;
@@ -25,23 +28,63 @@ Status RemoteMemCreate(size_t num_bytes, size_t alignment, char *mem_id, Respons
     LOG(ERROR) << "Failed to open and bind socket to " << client_addr.sun_path;
 		res.status = M3_SYSCALL_FAILURE;
 	}
+  LOG(INFO) << "Opened socket";
+
 	if (sendto(sock_fd, (const void *)&req, sizeof(req), 0, (struct sockaddr *)&srv_addr, srv_addr_len) < 0) {
-		LOG(ERROR) << "Failed to send to endpoint " << srv_addr.sun_path;
+		LOG(INFO) << "Failed to send to endpoint " << srv_addr.sun_path;
 		res.status = M3_SYSCALL_SENDTO_FAILURE;
-	}	
+	}
+  LOG(INFO) << "Sent cuMemCreate request";
+  	
 	if (recvfrom(sock_fd, (void *)&res, sizeof(res), 0, (struct sockaddr *)&srv_addr, &srv_addr_len) < 0) {
 		res.status =  M3_SYSCALL_RECVFROM_FAILURE;
 	}
 	if (res.status != M3_ACK) {
      LOG(ERROR) << "Unknown error in M3 Server, returning code " << res.status;
 	}
-	
+  LOG(INFO) << "Received ACK";
+
 	if (ipcRecvShareableHandle(sock_fd, &res.sh_handle) < 0) {
     LOG(ERROR) << "Failed to receive shareable handle (fd)";
 		res.status = M3_SYSCALL_RECVHANDLE_FAILURE;
 	}
+  LOG(INFO) << "Received shareable handle";
 
 	return res.status;
+}
+
+Status RemoteMemRelease(size_t num_bytes, const char* mem_id, Response& res) {
+  LOG(INFO) << "RemoteMemRelease: Initiating...";
+
+  struct sockaddr_un client_addr;
+  client_addr.sun_family = AF_UNIX;
+  sprintf(client_addr.sun_path, "/tmp/m3shell_ipc_ep_%d", getpid());
+  unlink(client_addr.sun_path);
+  int sock_fd = M3::ipcOpenAndBindSocket(&client_addr);
+  if (sock_fd < 0) {
+    LOG(ERROR) << "Failed to open and bine socket to " << client_addr.sun_path;
+    res.status = M3::M3_SYSCALL_FAILURE;
+  }
+  LOG(INFO) << "RemoteMemRelease: Socket prepared";
+
+  Request req(M3_MEM_RELEASE, num_bytes, 0, mem_id);
+  LOG(INFO) << "RemoteMemRelease: Request prepared";
+
+  if (sendto(sock_fd, (const void *)&req, sizeof(req), 0, (struct sockaddr *)&M3::srv_addr, M3::srv_addr_len) < 0) {
+    LOG(ERROR) << "Failed to send to file " << M3::srv_addr.sun_path;
+    res.status = M3::M3_SYSCALL_FAILURE;
+  }
+  LOG(INFO) << "RemoteMemRelease: Transmission complete";
+
+  close(sock_fd);
+  LOG(INFO) << "RemoteMemRelease: Closed socket";
+
+  if (res.status != M3::M3_ACK) {
+    LOG(ERROR) << "M3 server returned error code " << res.status;
+  }
+
+  LOG(INFO) << "RemoteMemRelease: Terminating...";
+  return res.status;
 }
 
 Server::Server() {
@@ -50,14 +93,19 @@ Server::Server() {
 	cli_addr_len_ = sizeof(cli_addr_);
 
 	CUUTIL_ERRCHK( cuInit(0) );	
+  ordinal_ = 0;
+  CUUTIL_ERRCHK( cuDeviceGet(&device_, ordinal_) );
 
 	CUmemAllocationProp prop = initProp();
 	CUUTIL_ERRCHK( cuMemGetAllocationGranularity(&granularity_, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM)  );
-  std::cout << "M3 Server granularity = " << granularity_ << std::endl;
+  std::cout << "M3 Server granularity = " << granularity_;
 	prop = initProp();
 	CUmemGenericAllocationHandle ah;
 	CUUTIL_ERRCHK( cuMemCreate(&ah, 0x200000, &prop, 0) );
 
+
+  totalAllocatedMem_ = 0;
+  CUUTIL_ERRCHK( cuDeviceTotalMem(&totalAvailableMem_, device_) );
 }
 
 void Server::Run() {
@@ -108,10 +156,12 @@ void Server::Run() {
 			if(ipcSendShareableHandle(sock_fd_, &cli_addr_, res_.sh_handle) < 0) {
 				panic("Sending shareable handle");
 			}
+      close(res_.sh_handle);
 		}
-	}
-}
 
+	}
+
+}
 
 } /* namespace M3 */
 

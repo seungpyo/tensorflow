@@ -444,6 +444,8 @@ class SubAllocator {
   // buffer following the returend pointer.
   virtual void* Alloc(size_t alignment, size_t num_bytes,
                       size_t* bytes_received) = 0;
+  void* Alloc(size_t alignment, size_t num_bytes,
+              size_t* bytes_received, const char* memId); 
   virtual void Free(void* ptr, size_t num_bytes) = 0;
 
   // Returns true if the BFC allocator can safely coalesce adjacent regions

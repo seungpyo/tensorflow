@@ -54,7 +54,8 @@ class GpuVirtualMemAllocator : public SubAllocator {
   // alignment is ignored by this allocator.
   void* Alloc(size_t alignment, size_t num_bytes,
               size_t* bytes_received) override;
-
+  void* Alloc(size_t alignment, size_t num_bytes,
+              size_t* bytes_received, const char* memId);
   // Frees should only happen at the end of the contiguous memory allocations or
   // else we introduce pointless fragmentation...But, this is supported. If the
   // allocation happens at the end, then the next_alloc_offset_ is moved back,
@@ -67,6 +68,8 @@ class GpuVirtualMemAllocator : public SubAllocator {
   // In practice, since the BFC allocator coalesces adjacent AllocationRegions,
   // this free function should never be invoked.
   void Free(void* ptr, size_t num_bytes) override;
+  void Free(void* ptr, size_t num_bytes, const char* memId);
+
 
   bool SupportsCoalescing() const override { return true; }
 
@@ -103,6 +106,8 @@ class GpuVirtualMemAllocator : public SubAllocator {
   };
   // List of mappings, sorted by va.
   std::vector<Mapping> mappings_;
+
+  std::unordered_map<void*, std::string> addr2memId_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(GpuVirtualMemAllocator);
 };

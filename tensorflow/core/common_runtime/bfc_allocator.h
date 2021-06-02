@@ -438,6 +438,10 @@ class BFCAllocator : public Allocator {
   // Try to add a new memory region that can satisfy an allocation of
   // 'rounded_bytes' bytes.  Returns true on success and false on
   // failure.
+  bool Extend(size_t alignment, size_t rounded_bytes, const char* memId)
+      TF_EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+
   bool Extend(size_t alignment, size_t rounded_bytes)
       TF_EXCLUSIVE_LOCKS_REQUIRED(lock_);
 

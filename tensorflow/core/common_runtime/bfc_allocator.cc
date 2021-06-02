@@ -16,6 +16,8 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/bfc_allocator.h"
 
 #include <atomic>
+#include <ctime>
+#include <cstdio>
 
 #include "absl/strings/string_view.h"
 #include "tensorflow/core/common_runtime/allocator_retry.h"
@@ -104,6 +106,10 @@ const BFCAllocator::Chunk* BFCAllocator::ChunkFromHandle(ChunkHandle h) const {
 }
 
 bool BFCAllocator::Extend(size_t alignment, size_t rounded_bytes) {
+    return BFCAllocator::Extend(alignment, rounded_bytes, nullptr);
+}
+
+bool BFCAllocator::Extend(size_t alignment, size_t rounded_bytes, const char* memId) {
   size_t available_bytes = memory_limit_ - total_region_allocated_bytes_;
   // Rounds available_bytes down to the nearest multiple of kMinAllocationSize.
   available_bytes = (available_bytes / kMinAllocationSize) * kMinAllocationSize;
@@ -123,10 +129,30 @@ bool BFCAllocator::Extend(size_t alignment, size_t rounded_bytes) {
     increased_allocation = true;
   }
 
+// #define SEUNGPYO
+
+#ifdef SEUNGPYO
+  LOG(INFO) << "Using SEUNGPYO version";
+#endif
+
   // Try allocating.
+#ifdef SEUNGPYO
+  size_t bytes = std::min(rounded_bytes, available_bytes);
+  LOG(INFO) << "Extending 0x" << std::hex << bytes << "bytes for memId = " << memId;
+#else
   size_t bytes = std::min(curr_region_allocation_bytes_, available_bytes);
+#endif /* SEUNGPYO */
+
   size_t bytes_received;
+  
+#ifdef SEUNGPYO
+  void* mem_addr = memId == nullptr ?
+      sub_allocator_->Alloc(alignment, bytes, &bytes_received) :
+      sub_allocator_->Alloc(alignment, bytes, &bytes_received, memId);
+#else
   void* mem_addr = sub_allocator_->Alloc(alignment, bytes, &bytes_received);
+#endif /* SEUNGPYO */
+
   if (mem_addr == nullptr && !started_backpedal_) {
     // Only backpedal once.
     started_backpedal_ = true;
@@ -137,7 +163,13 @@ bool BFCAllocator::Extend(size_t alignment, size_t rounded_bytes) {
     while (mem_addr == nullptr) {
       bytes = RoundedBytes(bytes * kBackpedalFactor);
       if (bytes < rounded_bytes) break;
+#ifdef SEUNGPYO
+      mem_addr = memId == nullptr ?
+          sub_allocator_->Alloc(alignment, bytes, &bytes_received) :
+          sub_allocator_->Alloc(alignment, bytes, &bytes_received, memId);
+#else
       mem_addr = sub_allocator_->Alloc(alignment, bytes, &bytes_received);
+#endif /* SEUNGPYO */
     }
   }
 
